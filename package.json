@@ -5,6 +5,7 @@
   "license": "MIT",
   "type": "module",
   "main": "./server.js",
+  "types": "./server.d.ts",
   "bin": {
     "steemauth-relay": "./bin.js"
   },
