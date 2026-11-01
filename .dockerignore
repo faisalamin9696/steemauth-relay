@@ -1,0 +1,7 @@
+# SteemAuthenticator relay — one-line ignore.
+node_modules/
+npm-debug.log*
+.env
+.env.*
+Dockerfile
+.dockerignore

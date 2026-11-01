@@ -1,0 +1,21 @@
+# Secrets — never commit credentials
+.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Packaging / tooling
+*.tgz
+.DS_Store
+
+# Durable store (compose volume ./data) — rooms/logs never leave the server
+data/
+*.db
+*.db-wal
+*.db-shm

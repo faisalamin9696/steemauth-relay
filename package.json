@@ -1,0 +1,30 @@
+{
+  "name": "steemauth-relay",
+  "version": "3.0.0",
+  "description": "Durable WebSocket message plane for SteemAuthenticator sessions (protocol v3). Token-authenticated rooms with sequenced logs + replay — opaque encrypted envelopes only: no auth accounts, no credential endpoints, no payload logging.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./server.js",
+  "bin": {
+    "steemauth-relay": "./bin.js"
+  },
+  "files": [
+    "server.js",
+    "server.d.ts",
+    "bin.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "start": "node bin.js",
+    "dev": "node --env-file=.env bin.js",
+    "test": "node --test --test-timeout=15000 test.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=18",
+    "node:sqlite note": "STORE=sqlite requires Node >= 22"
+  }
+}

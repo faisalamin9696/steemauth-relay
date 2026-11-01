@@ -1,0 +1,47 @@
+# SteemAuthenticator relay — Dokploy / Docker Compose.
+#
+# Dokploy builds the Dockerfile, runs this service, and its bundled Traefik
+# reverse proxy terminates TLS and forwards the WebSocket upgrade on the same
+# port — no extra proxy config needed. Attach the domain `relay.steempro.com`
+# to this service in the Dokploy dashboard (Domain → Add), point DNS at your
+# VPS, and Traefik issues a Let's Encrypt cert automatically.
+#
+# Local run (no Dokploy):   docker compose up --build
+# Then:                      curl http://localhost:8787/healthz   → ok
+
+services:
+  relay:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: steemauth-relay
+    restart: unless-stopped
+    ports:
+      # Traefik (or your host proxy) reaches the relay on 8787. Bind to
+      # localhost only when a host-level proxy (Caddy/nginx) fronts it;
+      # use "8787:8787" when Traefik routes straight to the container.
+      - "8787:8787"
+    environment:
+      - PORT=8787
+      # Durable rooms: sqlite survives restarts / redeploys. Use
+      # STORE=memory only for throwaway/dev instances.
+      - STORE=sqlite
+      - RELAY_DB=/data/relay.db
+      # Optional: restrict browser Origins (comma-separated). Leave unset
+      # for the open relay — rooms are unguessable, joins are token-checked
+      # and payloads are encrypt-then-MAC ciphertext the relay can't read.
+      # - ALLOWED_ORIGINS=https://steempro.com,https://app.steempro.com
+    volumes:
+      # The sqlite store lives on the host so restarts keep rooms + logs.
+      - ./data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8787/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
