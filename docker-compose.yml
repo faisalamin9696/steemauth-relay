@@ -27,6 +27,16 @@ services:
       # STORE=memory only for throwaway/dev instances.
       - STORE=sqlite
       - RELAY_DB=/data/relay.db
+      # Supabase revocation registry — set these in Dokploy / the host env
+      # (compose passes them through; empty = disabled, fail-open).
+      # Use the SteemAuthenticator app's EXPO_PUBLIC_SUPABASE_URL and
+      # EXPO_PUBLIC_SUPABASE_ANON_KEY values (anon key suffices: RLS grants
+      # SELECT on steemauth_sessions). GET /healthz must show
+      # "supabase":true after (re)deploy for revocation push to work.
+      - SUPABASE_URL=${SUPABASE_URL:-}
+      - SUPABASE_KEY=${SUPABASE_KEY:-}
+      - SUPABASE_TABLE=${SUPABASE_TABLE:-steemauth_sessions}
+      - REVOCATION_POLL_MS=${REVOCATION_POLL_MS:-5000}
       # Optional: restrict browser Origins (comma-separated). Leave unset
       # for the open relay — rooms are unguessable, joins are token-checked
       # and payloads are encrypt-then-MAC ciphertext the relay can't read.
