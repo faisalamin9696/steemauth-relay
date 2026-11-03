@@ -32,6 +32,13 @@ browser ── wss ──▶ ┌────────────────
   No config endpoint, no stats, no payload logging. Rooms and rows expire
   (sliding idle 15 min, hard cap 60 min) and are deleted by the sweeper;
   `close` deletes immediately.
+- **Supabase revocation watch** — when `SUPABASE_URL` + `SUPABASE_KEY`
+  are configured, connected clients can send `{ t:"watch", sid }` to
+  register interest in a session's revocation status. The relay polls
+  Supabase for `revoked_at` changes (batched, only while watchers exist)
+  and pushes `{ t:"revoked", sid, reason }` to all watching websockets.
+  Credentials never leave the relay process. One-shot: once revoked, the
+  sid is removed from watchers.
 
 ## Run
 
@@ -50,6 +57,10 @@ STORE=sqlite RELAY_DB=/data/relay.db PORT=8787 steemauth-relay
 | `RELAY_DB` | `./relay.db` | sqlite file when `STORE=sqlite` |
 | `ALLOWED_ORIGINS` | *(open)* | comma-separated browser Origin allowlist |
 | `MAX_ROOMS` / `ROOM_IDLE_MS` / `MESSAGES_PER_SECOND` | see `DEFAULTS` | limit overrides |
+| `SUPABASE_URL` | *(none)* | Supabase project URL for revocation watch |
+| `SUPABASE_KEY` | *(none)* | Supabase anon/service key (never leaves the relay) |
+| `SUPABASE_TABLE` | `steemauth_sessions` | Supabase table name |
+| `REVOCATION_POLL_MS` | `5000` | revocation poll interval (0 = disabled) |
 
 Run behind TLS in production (clients use `wss://`). Docker:
 `docker compose up` (mount `/data` for the sqlite store).
@@ -69,6 +80,9 @@ relay  → room   { t:"msg",   seq, payload }     (other members; no echo)
 client → relay  { t:"rotate" }  → { t:"ok", tok }   (app token only)
 client → relay  { t:"close" }                    (app token only)
 client → relay  { t:"ping" }   → { t:"pong" }
+client → relay  { t:"watch",  sid }              (Supabase revocation watch)
+relay  → client { t:"watched" }                  (ack)
+relay  → client { t:"revoked", sid, reason }     (revocation detected)
 relay  → client { t:"err", code }   bad_shape · bad_token · room_expired ·
                                     room_exists · too_many_rooms · not_member ·
                                     not_app · rate_limited · room_log_full ·
@@ -81,7 +95,7 @@ Close codes: `4000` room expired/closed · `4003` origin not allowed ·
 
 The full session-level contract (QR fields, envelopes, messages) lives in
 the package repo:
-[protocol.md](https://github.com/faisalamin9696/steemauth-qr/blob/main/docs/protocol.md).
+[api.md — Protocol](https://github.com/faisalamin9696/steemauth-qr/blob/main/docs/api.md#protocol).
 
 ## Programmatic use
 

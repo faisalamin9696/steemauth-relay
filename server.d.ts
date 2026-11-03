@@ -17,6 +17,8 @@ export interface RelayLimits {
   authFailBanMs?: number;
   sweepIntervalMs?: number;
   maxBufferedBytes?: number;
+  /** How often to poll Supabase for revocations (ms). 0 = disabled. */
+  revocationPollMs?: number;
 }
 
 export interface RoomRecord {
@@ -83,6 +85,12 @@ export interface CreateRelayOptions extends RelayLimits {
   store?: 'memory' | 'sqlite' | Store;
   dbPath?: string;
   allowedOrigins?: string[] | null;
+  /** Supabase project URL for revocation watch (env: SUPABASE_URL). */
+  supabaseUrl?: string;
+  /** Supabase anon/service key (env: SUPABASE_KEY). Never leaves the relay. */
+  supabaseKey?: string;
+  /** Supabase table name (env: SUPABASE_TABLE). Default: steemauth_sessions. */
+  supabaseTable?: string;
 }
 
 export interface RelayHandle {

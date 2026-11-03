@@ -8,6 +8,10 @@
  *   RELAY_DB            sqlite file (default ./relay.db when STORE=sqlite)
  *   ALLOWED_ORIGINS     comma-separated browser Origin allowlist
  *   MAX_ROOMS, ROOM_IDLE_MS, MESSAGES_PER_SECOND  …see DEFAULTS in server.js
+ *   SUPABASE_URL        Supabase project URL for revocation watch
+ *   SUPABASE_KEY        Supabase anon/service key (never leaves the relay)
+ *   SUPABASE_TABLE      Supabase table name (default steemauth_sessions)
+ *   REVOCATION_POLL_MS  Revocation poll interval (default 5000, 0=disabled)
  */
 import { createRelayServer } from './server.js';
 
@@ -23,6 +27,10 @@ if (process.env.STORE === 'sqlite') {
 if (process.env.MAX_ROOMS) opts.maxRooms = Number(process.env.MAX_ROOMS);
 if (process.env.ROOM_IDLE_MS) opts.roomIdleMs = Number(process.env.ROOM_IDLE_MS);
 if (process.env.MESSAGES_PER_SECOND) opts.messagesPerSecond = Number(process.env.MESSAGES_PER_SECOND);
+if (process.env.SUPABASE_URL) opts.supabaseUrl = process.env.SUPABASE_URL;
+if (process.env.SUPABASE_KEY) opts.supabaseKey = process.env.SUPABASE_KEY;
+if (process.env.SUPABASE_TABLE) opts.supabaseTable = process.env.SUPABASE_TABLE;
+if (process.env.REVOCATION_POLL_MS) opts.revocationPollMs = Number(process.env.REVOCATION_POLL_MS);
 
 const relay = createRelayServer(opts);
 

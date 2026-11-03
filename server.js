@@ -57,6 +57,8 @@ const ROOM_RE = /^rm_[A-Za-z0-9_-]{16,64}$/;
 const TOK_RE = /^tok_[A-Za-z0-9_-]{32,128}$/;
 const HASH_RE = /^[0-9a-f]{64}$/;
 const MAC_RE = /^[0-9a-f]{64}$/;
+/** Session id shape (UUID v4) — the relay validates before any Supabase query. */
+const SID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export const DEFAULTS = {
   maxPeersPerRoom: 4,
@@ -78,6 +80,8 @@ export const DEFAULTS = {
   sweepIntervalMs: 30_000,
   /** slow-consumer cut-off (buffered bytes) */
   maxBufferedBytes: 1024 * 1024,
+  /** How often to poll Supabase for revocations (ms). 0 = disabled. */
+  revocationPollMs: 5_000,
 };
 
 function sha256Hex(input) {
@@ -314,6 +318,93 @@ export function createRelayServer(opts = {}) {
   else if (store === 'sqlite') store = new SqliteStore(limits, opts.dbPath ?? process.env.RELAY_DB ?? ':memory:');
   const allowedOrigins = opts.allowedOrigins ?? null;
 
+  // Supabase revocation watch — the relay holds sids for connected clients
+  // and polls for revoked_at changes. Supabase credentials NEVER leave this
+  // process (no endpoint exposes them, no frame carries them).
+  const supabaseUrl = opts.supabaseUrl ?? process.env.SUPABASE_URL ?? null;
+  const supabaseKey = opts.supabaseKey ?? process.env.SUPABASE_KEY ?? null;
+  const supabaseTable = opts.supabaseTable ?? process.env.SUPABASE_TABLE ?? 'steemauth_sessions';
+  const revocationPollMs = opts.revocationPollMs ?? Number(process.env.REVOCATION_POLL_MS ?? 5_000);
+  const supabaseEnabled = Boolean(supabaseUrl && supabaseKey && revocationPollMs > 0);
+
+  /** sid → Set<ws> — which websockets are watching which sid for revocation. */
+  const watchers = new Map();
+  let revocationPoll = null;
+  let supabaseWarned = false;
+
+  function addWatcher(sid, ws) {
+    let set = watchers.get(sid);
+    if (!set) watchers.set(sid, (set = new Set()));
+    set.add(ws);
+    ws.__watchSid = sid;
+    if (!revocationPoll && supabaseEnabled) startRevocationPoll();
+  }
+
+  function removeWatcher(ws) {
+    const sid = ws.__watchSid;
+    if (!sid) return;
+    ws.__watchSid = null;
+    const set = watchers.get(sid);
+    if (set) {
+      set.delete(ws);
+      if (set.size === 0) watchers.delete(sid);
+    }
+    if (watchers.size === 0) stopRevocationPoll();
+  }
+
+  function startRevocationPoll() {
+    revocationPoll = setInterval(pollRevocations, revocationPollMs);
+    revocationPoll.unref?.();
+  }
+
+  function stopRevocationPoll() {
+    if (revocationPoll) {
+      clearInterval(revocationPoll);
+      revocationPoll = null;
+    }
+  }
+
+  async function pollRevocations() {
+    if (watchers.size === 0) return;
+    const sids = [...watchers.keys()];
+    const sidParam = sids.join(',');
+    const url = `${supabaseUrl}/rest/v1/${supabaseTable}?sid=in.(${sidParam})&revoked_at=not.is.null&select=sid,revoked_reason`;
+    try {
+      const res = await fetch(url, {
+        headers: {
+          'apikey': supabaseKey,
+          'Authorization': `Bearer ${supabaseKey}`,
+        },
+      });
+      if (!res.ok) {
+        if (!supabaseWarned) {
+          console.error(`[revocation] Supabase query failed: ${res.status} ${res.statusText}`);
+          supabaseWarned = true;
+        }
+        return;
+      }
+      supabaseWarned = false;
+      const rows = await res.json();
+      for (const row of rows) {
+        const sid = row.sid;
+        const reason = row.revoked_reason || 'Access was revoked in the authenticator.';
+        const set = watchers.get(sid);
+        if (!set) continue;
+        for (const ws of set) {
+          send(ws, { t: 'revoked', sid, reason });
+          ws.__watchSid = null;
+        }
+        watchers.delete(sid);
+      }
+      if (watchers.size === 0) stopRevocationPoll();
+    } catch (e) {
+      if (!supabaseWarned) {
+        console.error(`[revocation] Supabase unreachable: ${e.message}`);
+        supabaseWarned = true;
+      }
+    }
+  }
+
   /** Per-IP bookkeeping for create/join limits + auth-failure bans. */
   const ipState = new Map(); // ip -> { creates, createsAt, joins, joinsAt, fails, bannedUntil }
   const ipOf = (req) => req.socket.remoteAddress ?? 'unknown';
@@ -329,8 +420,8 @@ export function createRelayServer(opts = {}) {
   const httpServer = createServer((req, res) => {
     // Data minimisation: health only. No config, no credentials, no stats.
     if (req.url === '/healthz') {
-      res.writeHead(200, { 'content-type': 'text/plain' });
-      res.end('ok');
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, supabase: supabaseEnabled }));
       return;
     }
     res.writeHead(404);
@@ -608,12 +699,30 @@ export function createRelayServer(opts = {}) {
           removeMember(ws);
           send(ws, { t: 'left' });
           break;
+        case 'watch': {
+          const sid = String(msg.sid ?? '');
+          if (!SID_RE.test(sid)) {
+            send(ws, { t: 'err', code: 'bad_shape' });
+            return;
+          }
+          if (!supabaseEnabled) {
+            send(ws, { t: 'err', code: 'bad_shape' });
+            return;
+          }
+          if (ws.__watchSid && ws.__watchSid !== sid) removeWatcher(ws);
+          addWatcher(sid, ws);
+          send(ws, { t: 'watched' });
+          break;
+        }
         default:
           send(ws, { t: 'err', code: 'bad_shape' });
       }
     });
 
-    const cleanup = () => removeMember(ws);
+    const cleanup = () => {
+      removeMember(ws);
+      removeWatcher(ws);
+    };
     ws.on('close', cleanup);
     ws.on('error', cleanup);
   });
@@ -655,6 +764,8 @@ export function createRelayServer(opts = {}) {
      *  `close` frame and the idle sweeper ever delete data. */
     async close() {
       clearInterval(sweeper);
+      stopRevocationPoll();
+      watchers.clear();
       for (const set of members.values()) {
         for (const peer of set) {
           try {
@@ -678,6 +789,6 @@ export function createRelayServer(opts = {}) {
 }
 
 function stripKnown(opts) {
-  const { store, dbPath, allowedOrigins, ...limits } = opts;
+  const { store, dbPath, allowedOrigins, supabaseUrl, supabaseKey, supabaseTable, ...limits } = opts;
   return limits;
 }
