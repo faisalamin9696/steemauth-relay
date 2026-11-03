@@ -331,6 +331,10 @@ export function createRelayServer(opts = {}) {
   const watchers = new Map();
   let revocationPoll = null;
   let supabaseWarned = false;
+  /** In-flight poll guard — catch-up and interval ticks never overlap. */
+  let polling = false;
+  let lastPollAt = 0;
+  let immediateTimer = null;
 
   function addWatcher(sid, ws) {
     let set = watchers.get(sid);
@@ -338,6 +342,10 @@ export function createRelayServer(opts = {}) {
     set.add(ws);
     ws.__watchSid = sid;
     if (!revocationPoll && supabaseEnabled) startRevocationPoll();
+    // Catch-up: a session revoked while nobody watched must surface as soon
+    // as a client registers, not one poll tick later. Coalesced + min-spaced
+    // (1 s) so a watch flood can never turn into a Supabase query flood.
+    scheduleImmediateCheck();
   }
 
   function removeWatcher(ws) {
@@ -362,14 +370,30 @@ export function createRelayServer(opts = {}) {
       clearInterval(revocationPoll);
       revocationPoll = null;
     }
+    if (immediateTimer) {
+      clearTimeout(immediateTimer);
+      immediateTimer = null;
+    }
+  }
+
+  function scheduleImmediateCheck() {
+    if (!supabaseEnabled || immediateTimer) return;
+    const wait = Math.max(0, 1_000 - (Date.now() - lastPollAt));
+    immediateTimer = setTimeout(() => {
+      immediateTimer = null;
+      void pollRevocations();
+    }, wait);
+    immediateTimer.unref?.();
   }
 
   async function pollRevocations() {
-    if (watchers.size === 0) return;
-    const sids = [...watchers.keys()];
-    const sidParam = sids.join(',');
-    const url = `${supabaseUrl}/rest/v1/${supabaseTable}?sid=in.(${sidParam})&revoked_at=not.is.null&select=sid,revoked_reason`;
+    if (polling || watchers.size === 0) return;
+    polling = true;
+    lastPollAt = Date.now();
     try {
+      const sids = [...watchers.keys()];
+      const sidParam = sids.join(',');
+      const url = `${supabaseUrl}/rest/v1/${supabaseTable}?sid=in.(${sidParam})&revoked_at=not.is.null&select=sid,revoked_reason`;
       const res = await fetch(url, {
         headers: {
           'apikey': supabaseKey,
@@ -402,6 +426,8 @@ export function createRelayServer(opts = {}) {
         console.error(`[revocation] Supabase unreachable: ${e.message}`);
         supabaseWarned = true;
       }
+    } finally {
+      polling = false;
     }
   }
 
